@@ -1,0 +1,164 @@
+---
+# tasks file for services_install
+- name: Install required system packages
+  apt:
+    pkg:
+      - apt-transport-https
+      - ca-certificates
+      - software-properties-common
+      - python3-pip
+      - virtualenv
+      - python3-setuptools
+      - gnupg
+      - gnupg2
+      - gpg
+      - unzip
+    state: present
+    update_cache: true
+
+- name: Create a directory for logs
+  become: true
+  file:
+    path: /home/ubuntu/logs
+    state: directory
+    mode: '0755'
+  when: "'srv' in group_names"
+
+- name: Disable swap and enable kernel modules
+  become: true
+  shell: > 
+    swapoff -a &&
+    modprobe overlay &&
+    modprobe br_netfilter &&
+    echo "overlay" >> /etc/modules &&
+    echo "br_netfilter" >> /etc/modules
+  changed_when: false
+  when: "'k8s_master' in group_names or 'k8s_app' in group_names"
+
+- name: Add K8S GPG key
+  become: true
+  shell: >
+    curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
+  changed_when: false
+  when: "'k8s_master' in group_names or 'k8s_app' in group_names"
+
+- name: Add Kubernetes repository to sources.list
+  become: true
+  lineinfile:
+    path: /etc/apt/sources.list.d/kubernetes.list
+    line: 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.28/deb/ /'
+    create: yes
+  when: "'k8s_master' in group_names or 'k8s_app' in group_names"
+
+- name: Update package lists
+  become: true
+  apt:
+    update_cache: yes
+
+- name: Install required packages for k8s cluster
+  become: true
+  apt:
+    pkg:
+      - kubelet
+      - kubeadm
+      - kubectl
+    state: present
+    update_cache: true
+  when: "'k8s_master' in group_names or 'k8s_app' in group_names"
+
+- name: Hold kubeadm, kubelet, kubectl
+  dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop:
+    - kubeadm
+    - kubectl
+    - kubelet
+  when: "'k8s_master' in group_names or 'k8s_app' in group_names"
+
+- name: Add cri-o gpg key
+  become: true
+  shell: >
+    echo "deb https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/xUbuntu_22.04/ /" > /etc/apt/sources.list.d/devel:kubic:libcontainers:stable.list &&
+    echo "deb http://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable:/cri-o:/1.28/xUbuntu_22.04/ /" > /etc/apt/sources.list.d/devel:kubic:libcontainers:stable:cri-o:1.28.list &&
+    curl -L https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable:/cri-o:/1.28/xUbuntu_22.04/Release.key | apt-key add - &&
+    curl -L https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/xUbuntu_22.04/Release.key | apt-key add - &&
+    curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.28/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+  changed_when: false
+  when: "'k8s_master' in group_names or 'k8s_app' in group_names"
+
+- name: Install crio
+  apt:
+    pkg:
+      - cri-o
+      - cri-o-runc
+    state: present
+    update_cache: true
+  when: "'k8s_master' in group_names or 'k8s_app' in group_names"
+
+- name: Enable and start crio
+  systemd:
+    state: started
+    enabled: yes
+    name: crio
+  when: "'k8s_master' in group_names or 'k8s_app' in group_names"
+
+- name: Create a directory for helm
+  file:
+    path: /home/ubuntu/helm_chart
+    state: directory
+    mode: '0755'
+  when: "'k8s_master' in group_names"
+
+- name: Copy helm chart content
+  copy:
+    src: ~/sf_devops_project/devops-helm/
+    dest: /home/ubuntu/helm_chart/
+  when: "'k8s_master' in group_names"
+
+- name: Install helm
+  become: true
+  shell: >
+    curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 &&
+    chmod 700 get_helm.sh &&
+    ./get_helm.sh
+  changed_when: false
+  when: "'k8s_master' in group_names"
+
+- name: Copy promtail file to master
+  copy:
+    src: promtail
+    dest: /usr/local/bin/promtail
+  when: "'k8s_master' in group_names"
+
+- name: Create promtail dir
+  file:
+    path: /etc/promtail
+    state: directory
+    mode: '0755'
+  when: "'k8s_master' in group_names"
+
+- name: Add promtail config file
+  copy:
+    src: promtail.yaml
+    dest: /etc/promtail/promtail.yaml
+  when: "'k8s_master' in group_names"
+
+- name: Add systemd promtail
+  copy:
+    src: promtail.service
+    dest: /etc/systemd/system/promtail.service
+  when: "'k8s_master' in group_names"
+
+- name: Enable Promtail
+  become: true
+  shell: >
+    systemctl daemon-reload &&
+    systemctl enable promtail --now
+  changed_when: false
+  when: "'k8s_master' in group_names"
+
+- name: Show results
+  debug:
+    var: output
+  when: "'srv' in group_names"

@@ -1,0 +1,6 @@
+---
+# handlers file for services_install
+- name: Restart kubelet
+  systemd:
+    name: kubelet
+    state: restarted
